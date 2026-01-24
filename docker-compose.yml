@@ -1,0 +1,136 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ecommerce_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ecommerce_network
+    command: postgres -c listen_addresses='*' -c max_connections=200
+
+  generator:
+    build: ./generator
+    container_name: ecommerce_generator
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      GENERATION_INTERVAL: ${GENERATION_INTERVAL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ecommerce_network
+    restart: unless-stopped
+
+  redash-postgres:
+    image: postgres:15-alpine
+    container_name: redash_postgres
+    environment:
+      POSTGRES_DB: redash
+      POSTGRES_USER: redash
+      POSTGRES_PASSWORD: ${REDASH_DB_PASSWORD}
+    volumes:
+      - redash_postgres_data:/var/lib/postgresql/data
+    networks:
+      - ecommerce_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U redash"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redash_redis
+    networks:
+      - ecommerce_network
+
+  redash-server:
+    image: redash/redash:10.1.0.b50633
+    container_name: redash_server
+    platform: linux/amd64
+    command: server
+    depends_on:
+      redash-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "5080:5000"
+    environment:
+      REDASH_WEB_WORKERS: 4
+      REDASH_SECRET_KEY: ${REDASH_SECRET_KEY}
+      REDASH_DATABASE_URL: postgresql://redash:${REDASH_DB_PASSWORD}@redash-postgres/redash
+      REDASH_REDIS_URL: redis://redis:6379/0
+      REDASH_COOKIE_SECRET: ${REDASH_COOKIE_SECRET}
+      PYTHONUNBUFFERED: 0
+    networks:
+      - ecommerce_network
+    restart: always
+
+  redash-scheduler:
+    image: redash/redash:10.1.0.b50633
+    container_name: redash_scheduler
+    platform: linux/amd64
+    command: scheduler
+    depends_on:
+      redash-server:
+        condition: service_started
+      redash-postgres:
+        condition: service_healthy
+    environment:
+      REDASH_WEB_WORKERS: 1
+      REDASH_SECRET_KEY: ${REDASH_SECRET_KEY}
+      REDASH_COOKIE_SECRET: ${REDASH_COOKIE_SECRET}
+      REDASH_DATABASE_URL: postgresql://redash:${REDASH_DB_PASSWORD}@redash-postgres/redash
+      REDASH_REDIS_URL: redis://redis:6379/0
+      PYTHONUNBUFFERED: 0
+    networks:
+      - ecommerce_network
+    restart: always
+
+  redash-worker:
+    image: redash/redash:10.1.0.b50633
+    container_name: redash_worker
+    platform: linux/amd64
+    command: worker
+    depends_on:
+      redash-server:
+        condition: service_started
+      redash-postgres:
+        condition: service_healthy
+    environment:
+      REDASH_SECRET_KEY: ${REDASH_SECRET_KEY}
+      REDASH_COOKIE_SECRET: ${REDASH_COOKIE_SECRET}
+      REDASH_DATABASE_URL: postgresql://redash:${REDASH_DB_PASSWORD}@redash-postgres/redash
+      REDASH_REDIS_URL: redis://redis:6379/0
+      QUEUES: "queries,scheduled_queries,celery"
+      WORKERS_COUNT: 2
+      PYTHONUNBUFFERED: 0
+    networks:
+      - ecommerce_network
+    restart: always
+
+volumes:
+  postgres_data:
+  redash_postgres_data:
+
+networks:
+  ecommerce_network:
+    driver: bridge
