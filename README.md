@@ -201,7 +201,7 @@ ORDER BY count DESC;
 4. Расположите виджеты удобным образом
 5. Нажмите **Publish**
 
-## 📓 Jupyter Notebook - Анализ данных
+## Jupyter Notebook - Анализ данных
 
 ### Открытие Jupyter
 
